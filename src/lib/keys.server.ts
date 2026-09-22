@@ -135,7 +135,6 @@ export async function withImageKey<T>(
   const lane = laneFor(key);
   lane.busy = true;
   lane.starts.push(Date.now());
-  lastLeased = key;
   try {
     return await fn(key, chosen);
   } finally {
