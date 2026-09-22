@@ -2269,7 +2269,10 @@ export async function generateImage(
           lastErr = `${res.status} ${responseText}`.slice(0, 300);
           if (res.status === 429 || /error code:?\s*1015|rate limit|too many requests/i.test(responseText)) {
             const retryAfter = Number(res.headers.get("retry-after"));
-            reportImageRateLimit(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1_000 : undefined);
+            reportImageRateLimit(
+              key,
+              Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1_000 : 15_000,
+            );
           }
         }
         if (lastErr) console.warn(`[agnes] seed=${seed} attempt ${attempt + 1}: ${lastErr}`);

@@ -88,13 +88,20 @@ function laneReady(l: Lane, now: number): boolean {
 
 /** Round-robin cursor so load spreads evenly across the keys. */
 let cursor = 0;
-/** The key most recently handed out, so a rate-limit report can park it. */
-let lastLeased = "";
 
-/** Parks only the key that hit 429/1015; the other keys keep drawing. */
-export function reportImageRateLimit(retryAfterMs = 15_000): void {
-  if (!lastLeased) return;
-  const l = laneFor(lastLeased);
+/**
+ * Parks ONLY the key that actually hit 429/1015.
+ *
+ * This used to read a module-global "last leased key", which is wrong the
+ * moment more than one image is in flight: whichever lease happened most
+ * recently was blamed for a throttle raised by a different key. The throttled
+ * key stayed hot (so it was picked again immediately and throttled again) and a
+ * perfectly healthy key was parked — the stuck / resume / stuck cycle. The
+ * caller now passes the exact key it used, so the cooldown always lands on it.
+ */
+export function reportImageRateLimit(key: string, retryAfterMs = 15_000): void {
+  if (!key) return;
+  const l = laneFor(key);
   l.cooldownUntil = Math.max(l.cooldownUntil, Date.now() + Math.max(1_000, retryAfterMs));
 }
 
