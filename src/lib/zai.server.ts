@@ -193,6 +193,8 @@ async function callZai(user: string, opts: ChatOptions): Promise<string> {
       const started = Date.now();
       // A killed run never makes another upstream request.
       assertActive();
+      // This call is alive and working: extend its hold on the gate.
+      renewSlot();
       // Respects any shared cool-down and keeps calls spaced apart, so a burst
       // never triggers the provider's edge rate limit in the first place.
       await waitForSlot();
