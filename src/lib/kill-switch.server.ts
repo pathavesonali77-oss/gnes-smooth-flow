@@ -103,6 +103,21 @@ export function killableSignal(timeoutMs: number): { signal: AbortSignal; releas
   };
 }
 
+/**
+ * Things that must be released when everything stops.
+ *
+ * The rate gates (one text call at a time, one image per key) are plain
+ * module state. When a request is torn down mid-flight — Insta Kill, a closed
+ * tab, a serverless handler the platform drops — its `finally` may never run,
+ * so the gate stays "taken" by a job that no longer exists and every later run
+ * queues behind a ghost. Killing therefore hands the gates back explicitly.
+ */
+const killHooks = new Set<() => void>();
+
+export function registerKillHook(fn: () => void): void {
+  killHooks.add(fn);
+}
+
 /** Kills every run started up to now. Returns how many requests were aborted. */
 export function killAllRuns(): { killedAt: number; aborted: number } {
   killEpoch = Date.now();
@@ -116,6 +131,13 @@ export function killAllRuns(): { killedAt: number; aborted: number } {
       } catch {
         /* already gone */
       }
+    }
+  }
+  for (const hook of killHooks) {
+    try {
+      hook();
+    } catch {
+      /* a gate that cannot be reset must not block the kill */
     }
   }
   console.log(`[kill] insta kill at ${killEpoch}: aborted ${aborted} in-flight request(s)`);
