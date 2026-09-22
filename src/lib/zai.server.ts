@@ -10,7 +10,12 @@
  *    browser and never written into the codebase.
  */
 
-import { assertActive, killableSignal, KilledError } from "./kill-switch.server";
+import {
+  assertActive,
+  killableSignal,
+  KilledError,
+  registerKillHook,
+} from "./kill-switch.server";
 
 const API = "https://api.z.ai/api/paas/v4/chat/completions";
 
