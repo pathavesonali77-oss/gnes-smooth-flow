@@ -12,6 +12,9 @@
  * exhausted or invalid credential does not pin every later panel to one key.
  */
 
+import { assertActive, registerKillHook } from "./kill-switch.server";
+
+
 /** Hard provider ceiling per key, per rolling minute. */
 export const IMAGE_RPM = 20;
 /** Rolling window length. */

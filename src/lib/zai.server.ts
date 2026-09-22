@@ -73,36 +73,50 @@ const MIN_GAP_MS = 2_000;
  * the earlier version of this app did, and why it never tripped the provider's
  * edge rate limit (Cloudflare 1015). Spacing request STARTS is not enough on
  * its own: several long streams still overlap and count as a burst.
+ *
+ * The slot is a LEASE with an expiry, and waiters POLL for it.
+ *
+ * The previous counter + wake-up queue could strand the gate permanently in two
+ * ways: (1) the holder's request was torn down mid-flight (Insta Kill, a
+ * refresh, a dropped serverless handler), so its `finally` never ran and the
+ * counter never came back down; (2) a waiter that was woken while its own run
+ * was already dead threw before taking the slot and woke nobody after it, so
+ * the rest of the queue slept for the full fifteen-minute timeout. Either way
+ * the next script sat on "Reading script…" with nothing happening. A lease
+ * expires by itself, and polling waiters cannot lose a wake-up.
  */
-const MAX_IN_FLIGHT = 1;
-/** Longest a call may wait for its turn before failing instead of hanging. */
-const MAX_QUEUE_WAIT_MS = 900_000;
-let inFlight = 0;
-const waitingForSlot: (() => void)[] = [];
+/** Longest one text call may hold the slot before it is reclaimed. */
+const MAX_HOLD_MS = 300_000;
+/** 0 = free. Otherwise the moment the current holder's lease runs out. */
+let slotBusyUntil = 0;
 
 async function acquireSlot(): Promise<void> {
-  if (inFlight >= MAX_IN_FLIGHT) {
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const i = waitingForSlot.indexOf(wake);
-        if (i >= 0) waitingForSlot.splice(i, 1);
-        reject(new Error("Text engine busy: too many requests queued, please retry"));
-      }, MAX_QUEUE_WAIT_MS);
-      const wake = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-      waitingForSlot.push(wake);
-    });
+  for (;;) {
+    // A killed run, or one whose browser hung up, stops queueing at once.
+    assertActive();
+    const now = Date.now();
+    if (now >= slotBusyUntil) {
+      slotBusyUntil = now + MAX_HOLD_MS;
+      return;
+    }
+    await sleep(200);
   }
-  assertActive();
-  inFlight++;
+}
+
+/** Keeps a genuinely long answer's lease alive while it is still working. */
+function renewSlot(): void {
+  slotBusyUntil = Date.now() + MAX_HOLD_MS;
 }
 
 function releaseSlot(): void {
-  inFlight = Math.max(0, inFlight - 1);
-  waitingForSlot.shift()?.();
+  slotBusyUntil = 0;
 }
+
+/** Insta Kill: no text call is running any more, so the gate is free. */
+registerKillHook(() => {
+  slotBusyUntil = 0;
+  blockedUntil = 0;
+});
 
 async function waitForSlot(): Promise<void> {
   for (;;) {
