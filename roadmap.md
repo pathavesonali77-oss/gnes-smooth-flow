@@ -13,3 +13,4 @@
 - [x] Run one small script test and show the output image
 - [x] Fix the repeatable four-panel cutoff caused by Agnes error 1015 burst limiting
 - [x] Fix concurrent key misassignment: cooldowns now park the exact key that was throttled
+- [x] Fix stuck-forever after Insta Kill: text slot and image keys are now expiring leases, released on kill

@@ -12,6 +12,9 @@
  * exhausted or invalid credential does not pin every later panel to one key.
  */
 
+import { assertActive, registerKillHook } from "./kill-switch.server";
+
+
 /** Hard provider ceiling per key, per rolling minute. */
 export const IMAGE_RPM = 20;
 /** Rolling window length. */
@@ -59,7 +62,20 @@ export function agnesKey(): string {
   return agnesKeys()[0] as string;
 }
 
-type Lane = { starts: number[]; busy: boolean; cooldownUntil: number };
+/**
+ * `busyUntil` is a LEASE, not a flag.
+ *
+ * A boolean `busy` is only ever cleared by the `finally` of the job that set
+ * it. When that job's request is torn down mid-flight (Insta Kill, a refresh,
+ * a serverless handler the platform drops) the `finally` may never run, so the
+ * key stays "busy" forever. Once every key has leaked that way, the waiting
+ * loop below spins with nothing to give out and generation hangs with no error
+ * at all. A lease simply expires: a key can never be lost.
+ */
+type Lane = { starts: number[]; busyUntil: number; cooldownUntil: number };
+
+/** Longest one image request can hold a key (the 180s call plus slack). */
+const LEASE_MS = 240_000;
 
 /** One independent lane per key: each key draws its own image in parallel. */
 const lanes = new Map<string, Lane>();
@@ -67,7 +83,7 @@ const lanes = new Map<string, Lane>();
 function laneFor(key: string): Lane {
   let l = lanes.get(key);
   if (!l) {
-    l = { starts: [], busy: false, cooldownUntil: 0 };
+    l = { starts: [], busyUntil: 0, cooldownUntil: 0 };
     lanes.set(key, l);
   }
   return l;
@@ -78,7 +94,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** True when this key may start a request right now. */
 function laneReady(l: Lane, now: number): boolean {
   l.starts = l.starts.filter((t) => now - t < WINDOW_MS);
-  if (l.busy) return false;
+  if (now < l.busyUntil) return false;
   if (now < l.cooldownUntil) return false;
   const last = l.starts.length ? (l.starts[l.starts.length - 1] as number) : 0;
   if (now - last < SPACING_MS) return false;
@@ -105,6 +121,17 @@ export function reportImageRateLimit(key: string, retryAfterMs = 15_000): void {
   l.cooldownUntil = Math.max(l.cooldownUntil, Date.now() + Math.max(1_000, retryAfterMs));
 }
 
+/** Insta Kill hands every key back: nothing is drawing any more. */
+export function releaseAllImageKeys(): void {
+  for (const lane of lanes.values()) {
+    lane.busyUntil = 0;
+    lane.cooldownUntil = 0;
+    lane.starts = [];
+  }
+}
+
+registerKillHook(releaseAllImageKeys);
+
 /**
  * Leases a free key and runs the request on it. Every key works in parallel,
  * each held to its own 20 requests per minute, so nine images draw at once.
@@ -118,6 +145,9 @@ export async function withImageKey<T>(
   const keys = agnesKeys();
   let chosen = -1;
   for (;;) {
+    // A killed or abandoned run stops waiting for a key instead of spinning
+    // here silently for the rest of the process's life.
+    assertActive();
     const now = Date.now();
     for (let i = 0; i < keys.length; i++) {
       const idx = (cursor + i) % keys.length;
@@ -133,11 +163,11 @@ export async function withImageKey<T>(
   }
   const key = keys[chosen] as string;
   const lane = laneFor(key);
-  lane.busy = true;
+  lane.busyUntil = Date.now() + LEASE_MS;
   lane.starts.push(Date.now());
   try {
     return await fn(key, chosen);
   } finally {
-    lane.busy = false;
+    lane.busyUntil = 0;
   }
 }
