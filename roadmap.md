@@ -12,3 +12,4 @@
 - [x] Remove forced age, gender, relationship-status, and other lead-character restrictions
 - [x] Run one small script test and show the output image
 - [x] Fix the repeatable four-panel cutoff caused by Agnes error 1015 burst limiting
+- [x] Fix concurrent key misassignment: cooldowns now park the exact key that was throttled
